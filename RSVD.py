@@ -8,7 +8,6 @@ import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
 
-
 train_data = pd.read_csv("datasets/ml-100k/u1.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 test_data = pd.read_csv("datasets/ml-100k/u1.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(train_data['uid'])
@@ -64,13 +63,13 @@ class PMF:
             item_feature_matrix
         ))
 
-        for user in self.users:
-            indexs = self.records[:,0] == int(user)
-            user_bias_dict[user] = (self.records[indexs][:,2] - self.avg_rating).mean()
+        for user_id in self.users:
+            indexs = self.records[:,0] == int(user_id)
+            user_bias_dict[user_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
         # 物品特征初始化
-        for item in self.items:
-            indexs = self.records[:,1] == int(item)
-            item_bias_dict[item] = (self.records[indexs][:,2] - self.avg_rating).mean()
+        for item_id in self.items:
+            indexs = self.records[:,1] == int(item_id)
+            item_bias_dict[item_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
         
         self.user_bias = user_bias_dict
         self.item_bias = item_bias_dict
@@ -84,23 +83,22 @@ class PMF:
             # 每次迭代开始，将模型的属性loss置0
             self.loss = 0
             # 遍历评分记录
-            # TODO 这里不应该是随机抽取一个样本吗？
             for record in self.records:
                 sample = self.records[random.randint(0,len(self.records)-1)]
                 # 该记录的用户特征向量
-                user = self.users[sample[0]]
+                user_vector = self.users[sample[0]]
                 # 该记录的物品特征向量
-                item = self.items[sample[1]]
+                item_vector = self.items[sample[1]]
                 bias_u = self.user_bias[sample[0]]
                 bias_i = self.item_bias[sample[1]]
                 # 该记录的用户对物品的评分
                 rating = int(sample[2])
                 # 计算损失
-                error = self.loss_function(user, item, bias_u, bias_i, rating)
+                error = self.loss_function(user_vector, item_vector, bias_u, bias_i, rating)
                 # 损失累加
                 self.loss += error
                 # 预测值
-                predict_value = np.dot(user, item) + bias_u + bias_i + self.avg_rating
+                predict_value = np.dot(user_vector, item_vector) + bias_u + bias_i + self.avg_rating
                 # 全局平均的梯度
                 grad_avg_rating = predict_value - rating
                 # 用户偏差的梯度
@@ -108,10 +106,10 @@ class PMF:
                 # 用户偏差的梯度
                 grad_bias_item = predict_value - rating + self.beta_item * bias_i
                 # 计算该用户特征向量的梯度
-                grad_user = (predict_value - rating) * item + self.alpha_user * user
+                grad_user = (predict_value - rating) * item_vector + self.alpha_user * user_vector
                 # grad_user = -(rating - np.dot(user, item)) * item + self.alpha_user * user
                 # 计算该物品特征向量的梯度
-                grad_item = (predict_value - rating) * user + self.alpha_item * item
+                grad_item = (predict_value - rating) * user_vector + self.alpha_item * item_vector
                 # grad_item = -(rating - np.dot(user, item)) * user + self.alpha_item * item
                 # 根据梯度对特征向量进行更新
                 self.avg_rating -= self.learning_rate * grad_avg_rating
@@ -145,10 +143,10 @@ class PMF:
                 self.items[i] = self.items[i].tolist()
             json.dump(self.items, f2)
     # 损失函数定义
-    def loss_function(self, user, item, user_bias, item_bias, rating):
-        return 0.5 * math.pow((rating - self.avg_rating + user_bias + item_bias + np.dot(user, item)), 2) + \
-               0.5 * self.alpha_user * math.pow(np.linalg.norm(user, ord=2), 2) + \
-               0.5 * self.alpha_item * math.pow(np.linalg.norm(item, ord=2), 2) + \
+    def loss_function(self, user_vector, item_vector, user_bias, item_bias, rating):
+        return 0.5 * math.pow((rating - (self.avg_rating + user_bias + item_bias + np.dot(user_vector, item_vector))), 2) + \
+               0.5 * self.alpha_user * math.pow(np.linalg.norm(user_vector, ord=2), 2) + \
+               0.5 * self.alpha_item * math.pow(np.linalg.norm(item_vector, ord=2), 2) + \
                0.5 * self.beta_user * math.pow(user_bias, 2) + \
                0.5 * self.beta_item * math.pow(item_bias, 2)
 
@@ -179,14 +177,14 @@ class PMF:
         axs[1].plot(x, mae_list)
         axs[1].set_title('MAE={}'.format(round(min(mae_list),4)))
         plt.subplots_adjust(hspace=1.0)
-        plt.savefig('epoch={}&dimensions={}.png'.format(epochs,20))
+        plt.savefig('image/RSVD_epoch={}&dimensions={}.png'.format(epochs,20))
 
 
 if __name__ == "__main__":
     model = PMF(user_set, item_set, rating)
     start_time = time.time()
     model.vector_initialize()
-    model.train(15, test_data)
+    model.train(10, test_data)
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"程序运行时间: {elapsed_time:.2f} 秒")
