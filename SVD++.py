@@ -8,8 +8,12 @@ import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
 
-train_data = pd.read_csv("datasets/ml-100k/u1.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-test_data = pd.read_csv("datasets/ml-100k/u1.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+train_data = pd.read_csv("datasets/ml-100k/u3.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+# train_data_2 = pd.read_csv("datasets/ml-100k/u2.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+# train_data_3 = pd.read_csv("datasets/ml-100k/u3.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+# train_data_4 = pd.read_csv("datasets/ml-100k/u4.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+# train_data = pd.concat([train_data_1, train_data_2, train_data_3, train_data_4], ignore_index=True)
+test_data = pd.read_csv("datasets/ml-100k/u3.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(train_data['uid'])
 item_set = set(train_data['iid'])
 user_len = 943
@@ -19,7 +23,7 @@ rating = train_data.values
 # PMF 模型
 class PMF:
     # PMF 模型初始化，已经设置默认参数
-    def __init__(self, user_set, item_set, record_list, dimensions=20, learning_rate=0.01, alpha_user=0.01, alpha_item=0.01, alpha_context=0.01, beta_user=0.01, beta_item=0.01):
+    def __init__(self, user_set, item_set, record_list, dimensions=20, learning_rate=0.01, alpha_user=0.001, alpha_item=0.001, alpha_context=0.001, beta_user=0.001, beta_item=0.001):
         # 创建PMF时，表示用户id的set集合。调用vector_initialize函数后，表示用户的特征矩阵 {用户id：用户特征向量，...}
         self.users = user_set
         # 同上
@@ -123,7 +127,7 @@ class PMF:
                 user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
                 user_bias_vector = (np.sum(self.item_contexts[user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
                 # 预测值
-                predict_value = np.dot((self.users[user_id] + user_bias_vector), self.items[item_id]) + self.user_bias[user_id] + self.item_bias[item_id] + self.avg_rating
+                predict_value = self.predict_post_process(np.dot((self.users[user_id] + user_bias_vector), self.items[item_id]) + self.user_bias[user_id] + self.item_bias[item_id] + self.avg_rating)
                 # 计算损失
                 error = self.loss_function(user_id, item_id, rating, predict_value, user_rated_items_except_item)
                 # 损失累加
@@ -139,12 +143,6 @@ class PMF:
                 # 计算该物品特征向量的梯度
                 grad_item = (predict_value - rating) * (user_vector + user_bias_vector) + self.alpha_item * item_vector
                 # 物品的上下文特征向量的梯度
-                # self.item_contexts 最好直接变为narray的数组，不采用字典形式，向量化更新
-                # for user_rated_item_id in self.user_rated_items[user_id]:
-                #     if user_rated_item_id == item_id:
-                #         continue
-                #     grad_item_context = (predict_value - rating) * item_vector / norm_len + self.alpha_context * self.item_contexts[user_rated_item_id]
-                #     self.item_contexts[user_rated_item_id] -= self.learning_rate * grad_item_context
                 grad_item_contexts = (predict_value - rating) * item_vector / norm_len + self.alpha_context * self.item_contexts[user_rated_items_except_item]
                 self.item_contexts[user_rated_items_except_item] = self.item_contexts[user_rated_items_except_item] - self.learning_rate * grad_item_contexts
                 # 根据梯度对特征向量进行更新
@@ -196,8 +194,6 @@ class PMF:
                         ) 
                     )
                )
-            #    0.5 * self.alpha_context * np.sum([math.pow(np.linalg.norm(self.item_contexts[i], ord=2), 2) for i in self.user_rated_items[user_id] if i != item_id], axis=0)
-
 
 
     def predict(self, uid, iid):
@@ -209,8 +205,14 @@ class PMF:
         norm_len = len(user_rated_items_except_item)
         user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
         user_bias_vector = (np.sum(self.item_contexts[user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
-        return self.avg_rating + self.user_bias[uid] + self.item_bias[iid] + np.dot((self.users[uid] + user_bias_vector), self.items[iid])
+        return self.predict_post_process(self.avg_rating + self.user_bias[uid] + self.item_bias[iid] + np.dot((self.users[uid] + user_bias_vector), self.items[iid]))
 
+    def predict_post_process(self, rating):
+        if rating > 5:
+            return 5
+        elif rating < 1:
+            return 1
+        return rating
     
     def test(self, test_data):
         predict_values = []
@@ -239,7 +241,7 @@ if __name__ == "__main__":
     start_time = time.time()
     model.vector_initialize()
     print("开始训练")
-    model.train(100, test_data)
+    model.train(50, test_data)
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"程序运行时间: {elapsed_time:.2f} 秒")
