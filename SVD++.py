@@ -8,34 +8,41 @@ import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
 
-train_data = pd.read_csv("datasets/ml-100k/u3.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-# train_data_2 = pd.read_csv("datasets/ml-100k/u2.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-# train_data_3 = pd.read_csv("datasets/ml-100k/u3.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-# train_data_4 = pd.read_csv("datasets/ml-100k/u4.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-# train_data = pd.concat([train_data_1, train_data_2, train_data_3, train_data_4], ignore_index=True)
-test_data = pd.read_csv("datasets/ml-100k/u3.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-user_set = set(train_data['uid'])
-item_set = set(train_data['iid'])
+ex_train_data = pd.read_csv("datasets/ml-100k/ua.base.explicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+im_train_data = pd.read_csv("datasets/ml-100k/ua.base.implicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+test_data = pd.read_csv("datasets/ml-100k/ua.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+user_set = set(ex_train_data['uid'])
+item_set = set(ex_train_data['iid'])
+explicit_rating = ex_train_data.values
+implicit_rating = im_train_data.values
 user_len = 943
 item_len = 1682
-rating = train_data.values
+
 
 # PMF 模型
 class PMF:
     # PMF 模型初始化，已经设置默认参数
-    def __init__(self, user_set, item_set, record_list, dimensions=20, learning_rate=0.01, alpha_user=0.001, alpha_item=0.001, alpha_context=0.001, beta_user=0.001, beta_item=0.001):
+    def __init__(self, user_set, item_set, ex_record_list, im_record_list, dimensions=20, learning_rate=0.01, alpha_user=0.001, alpha_item=0.001, alpha_context=0.001, beta_user=0.001, beta_item=0.001):
         # 创建PMF时，表示用户id的set集合。调用vector_initialize函数后，表示用户的特征矩阵 {用户id：用户特征向量，...}
         self.users = user_set
         # 同上
         self.items = item_set
-        # 用户评过分的物品集合 {1:[2,3,4],...}
-        self.user_rated_items = {}
+        # 用户评过分的物品集合 {1:[2,3,4],...} 来自explicit_data
+        # self.user_rated_items = {}
+
+        # 用户评过分的物品集合 {1:[2,3,4],...} 来自implicit_data
+        self.user_interactived_items = {}
+        
         # 偏置向量
         self.user_bias = 0
         self.item_bias = 0
         self.avg_rating = 0
-        # 训练集中的记录列表
-        self.records = record_list
+
+        # 显式的评分矩阵
+        self.records = ex_record_list
+        # 隐式的矩阵，表示用户是否评分。这里先不处理最后一列的数据，只要不为0即认为被评分。
+        self.implicit_records = im_record_list
+
         # 用户和物品的特征维度，默认为20
         self.dimensions = dimensions
         # 学习率，默认为0.01
@@ -59,13 +66,16 @@ class PMF:
         # 用户和物品的特征使用字典来保存，Key是ID，Value是相应的特征向量
         user_bias_dict = {}
         item_bias_dict = {}
-        # 用户特征初始化
+        # 用户特征向量初始化
         user_feature_matrix = np.random.rand(user_len, self.dimensions).astype(np.float32)
         user_feature_matrix = (user_feature_matrix - 0.5) * 0.01
+        # 物品特征向量初始化
         item_feature_matrix = np.random.rand(item_len, self.dimensions).astype(np.float32)
         item_feature_matrix = (item_feature_matrix - 0.5) * 0.01
+        # 物品的潜在特征矩阵初始化
         item_context_feature_matrix = np.random.rand(item_len, self.dimensions).astype(np.float32)
         item_context_feature_matrix = (item_context_feature_matrix - 0.5) * 0.01
+        
         self.users = dict(zip(
             list(range(1, user_len+1)),
             user_feature_matrix
@@ -75,22 +85,28 @@ class PMF:
             item_feature_matrix
         ))
         self.item_contexts = item_context_feature_matrix
-        # self.item_contexts = dict(zip(
-        #     list(range(1, item_len+1)),
-        #     item_context_feature_matrix
-        # ))
+
         for user_id in self.users:
             indexs = (self.records[:,0] == int(user_id))
+            im_indexs = (self.implicit_records[:,0] == int(user_id))
             if (indexs == False).all():
+                user_bias_dict[user_id] = 0
                 continue
+
+            # 求解每个用户评分的偏差
             user_bias_dict[user_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
-            self.user_rated_items[user_id] = set(self.records[indexs][:,1])
-        # 物品特征初始化
+            # # 每个用户评过分的物品
+            # self.user_rated_items[user_id] = set(self.records[indexs][:,1])
+            # 从隐式反馈数据集中获取每个用户交互过的物品
+            self.user_interactived_items[user_id] = set(self.implicit_records[im_indexs][:,1])
+
         for item_id in self.items:
             indexs = (self.records[:,1] == int(item_id))
             # 训练集中有些物品没有出现
             if (indexs == False).all():
+                item_bias_dict[item_id] = 0
                 continue
+            # 求解每个物品被评分的偏差
             item_bias_dict[item_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
         
         self.user_bias = user_bias_dict
@@ -111,27 +127,31 @@ class PMF:
 
                 user_id = sample[0]
                 item_id = sample[1]
-                # 该记录的用户特征向量
+                rating = int(sample[2])
+
+                # 用户特征向量
                 user_vector = self.users[user_id]
-                # 该记录的物品特征向量
+                # 物品特征向量
                 item_vector = self.items[item_id]
                 bias_u = self.user_bias[user_id]
                 bias_i = self.item_bias[item_id]
-                # 该记录的用户对物品的评分
-                rating = int(sample[2])
+                
                 # 用户u的上下文偏好的特征向量
-                # 归一化的分母值
-                user_rated_items_except_item = self.user_rated_items[user_id].copy()
+                # 归一化的分母值。因为要去除掉本次的物品，所以重新创建一个新的内存地址，不改动原有的。
+                user_rated_items_except_item = self.user_interactived_items[user_id].copy()
                 user_rated_items_except_item.discard(item_id)
-                norm_len = len(user_rated_items_except_item)   
+                norm_len = len(user_rated_items_except_item)
+                # 要获取下标，所以从0开始   
                 user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
+
                 user_bias_vector = (np.sum(self.item_contexts[user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
-                # 预测值
+
+                #  预测值
                 predict_value = self.predict_post_process(np.dot((self.users[user_id] + user_bias_vector), self.items[item_id]) + self.user_bias[user_id] + self.item_bias[item_id] + self.avg_rating)
                 # 计算损失
-                error = self.loss_function(user_id, item_id, rating, predict_value, user_rated_items_except_item)
+                # error = self.loss_function(user_id, item_id, rating, predict_value, user_rated_items_except_item)
                 # 损失累加
-                self.loss += error
+                # self.loss += error
                 # 全局平均的梯度
                 grad_avg_rating = predict_value - rating
                 # 用户偏差的梯度
@@ -154,7 +174,7 @@ class PMF:
             
             end_time = time.time()
             elapsed_time = end_time - start_time
-            print(f"运行时间: {elapsed_time:.7f} 秒")
+            print(f"epoch: {epoch} | 运行时间: {elapsed_time:.7f} 秒")
             # 每迭代完一次，学习率降低
             self.learning_rate = self.learning_rate * 0.9
             predict, ground_value = self.test(test_data)
@@ -165,7 +185,7 @@ class PMF:
             print('RMSE={}'.format(rmse))
             print('MAE={}'.format(mae))
             # 打印每次迭代的损失
-            print("epoch: ", epoch, "loss:", self.loss)
+            # print("epoch: ", epoch, "loss:", self.loss)
 
         self.draw(epochs, rmse_list, mae_list)
 
@@ -200,7 +220,7 @@ class PMF:
         # 测试集中，有些电影在训练集中没有出现
         if iid not in self.item_bias.keys():
             return self.avg_rating
-        user_rated_items_except_item = self.user_rated_items[uid].copy()
+        user_rated_items_except_item = self.user_interactived_items[uid].copy()
         user_rated_items_except_item.discard(iid)
         norm_len = len(user_rated_items_except_item)
         user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
@@ -237,11 +257,11 @@ class PMF:
 
 
 if __name__ == "__main__":
-    model = PMF(user_set, item_set, rating)
+    model = PMF(user_set, item_set, explicit_rating, implicit_rating)
     start_time = time.time()
     model.vector_initialize()
     print("开始训练")
-    model.train(50, test_data)
+    model.train(100, test_data)
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"程序运行时间: {elapsed_time:.2f} 秒")

@@ -8,8 +8,8 @@ import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
 
-train_data = pd.read_csv("datasets/ml-100k/u1.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-test_data = pd.read_csv("datasets/ml-100k/u1.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+train_data = pd.read_csv("datasets/ml-100k/ua.base.explicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+test_data = pd.read_csv("datasets/ml-100k/ua.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(train_data['uid'])
 item_set = set(train_data['iid'])
 rating = train_data.values
@@ -23,7 +23,7 @@ class PMF:
         # 同上
         self.items = item_set
         # 偏置向量
-        self.user_bias = 0
+        self.user_bias = 0  
         self.item_bias = 0
         self.avg_rating = 0
         # 训练集中的记录列表
@@ -83,6 +83,7 @@ class PMF:
             # 每次迭代开始，将模型的属性loss置0
             self.loss = 0
             # 遍历评分记录
+            start_time = time.time()
             for record in self.records:
                 sample = self.records[random.randint(0,len(self.records)-1)]
                 # 该记录的用户特征向量
@@ -94,9 +95,9 @@ class PMF:
                 # 该记录的用户对物品的评分
                 rating = int(sample[2])
                 # 计算损失
-                error = self.loss_function(user_vector, item_vector, bias_u, bias_i, rating)
+                # error = self.loss_function(user_vector, item_vector, bias_u, bias_i, rating)
                 # 损失累加
-                self.loss += error
+                # self.loss += error
                 # 预测值
                 predict_value = np.dot(user_vector, item_vector) + bias_u + bias_i + self.avg_rating
                 # 全局平均的梯度
@@ -118,6 +119,9 @@ class PMF:
                 self.users[sample[0]] -= self.learning_rate * grad_user
                 self.items[sample[1]] -= self.learning_rate * grad_item
 
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+            print(f"epoch: {epoch} | 运行时间: {elapsed_time:.7f} 秒")
             # 每迭代完一次，学习率降低
             self.learning_rate = self.learning_rate * 0.9
             predict, ground_value = self.test(test_data)
@@ -184,7 +188,7 @@ if __name__ == "__main__":
     model = PMF(user_set, item_set, rating)
     start_time = time.time()
     model.vector_initialize()
-    model.train(10, test_data)
+    model.train(100, test_data)
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"程序运行时间: {elapsed_time:.2f} 秒")
