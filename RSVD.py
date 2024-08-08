@@ -7,7 +7,7 @@ import random
 import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
-
+random.seed(2024)
 train_data = pd.read_csv("datasets/ml-100k/ua.base.explicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 test_data = pd.read_csv("datasets/ml-100k/ua.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(train_data['uid'])

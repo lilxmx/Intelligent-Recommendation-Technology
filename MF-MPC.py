@@ -9,8 +9,8 @@ from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
 
 random.seed(2024)
-train_data = pd.read_csv("datasets/ml-100k/u1.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-test_data = pd.read_csv("datasets/ml-100k/u1.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+train_data = pd.read_csv("datasets/ml-100k/u5.base",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+test_data = pd.read_csv("datasets/ml-100k/u5  .test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(train_data['uid'])
 item_set = set(train_data['iid'])
 user_len = 943
@@ -27,12 +27,15 @@ class MPC:
         self.users = user_set
         # 同上
         self.items = item_set
+
         # 用户评过分的物品集合,具体到每个分数 {1:{"1":[2,3,4],...,"5":[5,19,..]},...}
         self.user_rated_items = {}
+
         # 偏置向量
         self.user_bias = 0
         self.item_bias = 0
         self.avg_rating = 0
+
         # 训练集中的记录列表
         self.records = record_list
         # 用户和物品的特征维度，默认为20
@@ -52,6 +55,10 @@ class MPC:
         # 训练过程中的损失
         self.loss = 0
 
+        self.final_user_matrix = {}
+        self.final_item_matrix = {}
+        self.final_item_virtual_matrix = {}
+
     # 初始化用户特征和物品特征
     def vector_initialize(self):
         self.avg_rating = self.records[:,2].mean()
@@ -61,13 +68,13 @@ class MPC:
         # 用户特征初始化
         user_feature_matrix = np.random.rand(user_len, self.dimensions).astype(np.float32)
         user_feature_matrix = (user_feature_matrix - 0.5) * 0.01
+
         item_feature_matrix = np.random.rand(item_len, self.dimensions).astype(np.float32)
         item_feature_matrix = (item_feature_matrix - 0.5) * 0.01
-        item_feature_rating_matrices = []
-        for i in rating_set:
-            temp_matrix = np.random.rand(item_len, self.dimensions).astype(np.float32)
-            temp_matrix = (item_feature_matrix - 0.5) * 0.01
-            item_feature_rating_matrices.append(temp_matrix)
+        # 新的物品不同评分对应的矩阵如下，shape= （5，1682，20）
+        item_rating_feature_matrices = np.random.rand(len(rating_set), item_len, self.dimensions).astype(np.float32)
+        item_rating_feature_matrices = (item_rating_feature_matrices - 0.5) * 0.01
+
         self.users = dict(zip(
             list(range(1, user_len+1)),
             user_feature_matrix
@@ -76,23 +83,31 @@ class MPC:
             list(range(1, item_len+1)),
             item_feature_matrix
         ))
-        self.item_rating_contexts = item_feature_rating_matrices
+        self.item_rating_contexts = item_rating_feature_matrices
 
         for user_id in self.users:
             indexs = (self.records[:,0] == int(user_id))
+            
             if (indexs == False).all():
+                user_bias_dict[user_id] = 0
                 continue
             user_bias_dict[user_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
+
+
+            # 需要获取每个用户不同评分的物品ID集合
             self.user_rated_items[user_id] = {}
-            # 需要获取每个用户不同评分的物品集合的index
             for r in rating_set:
-                temp_rating_indexs = indexs & (rating[:,2] == r)
-                self.user_rated_items[user_id][r] = set(self.records[temp_rating_indexs][:,1])
+                # 需要获取每个用户不同评分的物品集合的index
+                temp_item_indexs = indexs & (rating[:,2] == r)
+                self.user_rated_items[user_id][r] = set(self.records[temp_item_indexs][:,1])
+
+
         # 物品特征初始化
         for item_id in self.items:
             indexs = (self.records[:,1] == int(item_id))
             # 训练集中有些物品没有出现
             if (indexs == False).all():
+                item_bias_dict[item_id] = 0
                 continue
             item_bias_dict[item_id] = (self.records[indexs][:,2] - self.avg_rating).mean()
         
@@ -110,33 +125,35 @@ class MPC:
             # 遍历评分记录
             start_time = time.time()
             for record in self.records:
+                # sample = record
                 sample = self.records[random.randint(0,len(self.records)-1)]
 
                 user_id = sample[0]
                 item_id = sample[1]
-                # 该记录的用户对物品的评分
                 rating = int(sample[2])
-                # 该记录的用户特征向量
+
+                # 用户特征向量
                 user_vector = self.users[user_id]
-                # 该记录的物品特征向量
+                # 物品特征向量
                 item_vector = self.items[item_id]
+
                 bias_u = self.user_bias[user_id]
                 bias_i = self.item_bias[item_id]
+
                 # 用户u的上下文偏好的特征向量
                 # 归一化的分母值
-                user_multi_class_vector = 0
-                user_rated_items_except_item = self.user_rated_items[user_id].copy()
+                user_multi_class_vector = np.zeros(self.dimensions)
+                user_rated_items_except_item = self.user_rated_items[user_id]
+                temp_indexs = []
                 for r,item_ids in user_rated_items_except_item.items():
-                    item_ids.discard(item_id) 
-                    norm_len = len(item_ids)
-                    if norm_len == 0:
-                        continue
+                    copy_item_ids = item_ids
                     # 找到下标，从0开始，所以-1
-                    indexs = np.array(list(item_ids)) - 1
-                    try:
-                        user_multi_class_vector += (np.sum(self.item_rating_contexts[r-1][indexs], axis=0)) / math.sqrt(norm_len)
-                    except:
-                        print(indexs)
+                    indexs = np.array([iid for iid in copy_item_ids if iid != item_id]) - 1
+                    temp_indexs.append(indexs)
+                    if len(indexs) == 0:
+                        continue
+                    user_multi_class_vector += (np.sum(self.item_rating_contexts[r-1][indexs], axis=0)) / math.sqrt(len(indexs))
+
                 # 预测值
                 predict_value = self.predict_post_process(
                     np.dot(
@@ -150,10 +167,6 @@ class MPC:
                     self.item_bias[item_id] + 
                     self.avg_rating
                 )
-                # 计算损失
-                # error = self.loss_function(user_id, item_id, rating, predict_value, user_rated_items_except_item)
-                # 损失累加
-                # self.loss += error
                 # 全局平均的梯度
                 grad_avg_rating = predict_value - rating
                 # 用户偏差的梯度
@@ -164,17 +177,16 @@ class MPC:
                 grad_user = (predict_value - rating) * item_vector + self.alpha_user * user_vector
                 # 计算该物品特征向量的梯度
                 grad_item = (predict_value - rating) * (user_vector + user_multi_class_vector) + self.alpha_item * item_vector
+
                 # 物品的不同评分矩阵的特征向量的梯度
+                number = 0
                 for r,item_ids in user_rated_items_except_item.items():
-                    item_ids.discard(item_id) 
-                    # 找到下标，从0开始，所以-1
-                    norm_len = len(item_ids)
-                    if norm_len == 0:
+                    if len(temp_indexs[number]) == 0:
                         continue
-                    indexs = np.array(list(item_ids)) - 1   
-                    
-                    grad_item_ratings = (predict_value - rating) * item_vector / norm_len + self.alpha_context * self.item_rating_contexts[r-1][indexs]
-                    self.item_rating_contexts[r-1][indexs] = self.item_rating_contexts[r-1][indexs] - self.learning_rate * grad_item_ratings
+                    grad_item_ratings = ((predict_value - rating) * item_vector) / len(temp_indexs[number]) + self.alpha_context * self.item_rating_contexts[r-1][temp_indexs[number]]
+                    self.item_rating_contexts[r-1][temp_indexs[number]] -= self.learning_rate * grad_item_ratings
+                    number += 1
+                
                 # 根据梯度对特征向量进行更新
                 self.avg_rating -= self.learning_rate * grad_avg_rating
                 self.user_bias[user_id] -= self.learning_rate * grad_bias_user
@@ -184,7 +196,7 @@ class MPC:
             
             end_time = time.time()
             elapsed_time = end_time - start_time
-            print(f"运行时间: {elapsed_time:.7f} 秒")
+            print(f"epoch: {epoch} | 运行时间: {elapsed_time:.7f} 秒")
             # 每迭代完一次，学习率降低
             self.learning_rate = self.learning_rate * 0.9
             predict, ground_value = self.test(test_data)
@@ -192,24 +204,26 @@ class MPC:
             mae = mean_absolute_error(predict,ground_value)
             rmse_list.append(rmse)
             mae_list.append(mae)
-            print("epoch: ", epoch)
+            if rmse < min(rmse_list) or mae < min(mae_list):
+                self.final_user_matrix = self.users
+                self.final_item_matrix = self.items
+                # self.final_item_virtual_matrix = self.item_rating_contexts
             print('RMSE={}'.format(rmse))
             print('MAE={}'.format(mae))
-            # 打印每次迭代的损失
-            # print("epoch: ", epoch, "loss:", self.loss)
+
 
         self.draw(epochs, rmse_list, mae_list)
 
         # 训练完之后，将用户特征向量进行保存
         with codecs.open("pureResult/user_vector.json", "w") as f1:
-            for u in self.users.keys():
-                self.users[u] = self.users[u].tolist()
-            json.dump(self.users, f1)
+            for u in self.final_user_matrix.keys():
+                self.final_user_matrix[u] = self.final_user_matrix[u].tolist()
+            json.dump(self.final_user_matrix, f1)
         # 将物品特征向量进行保存
         with codecs.open("pureResult/item_vector.json", "w") as f2:
-            for i in self.items.keys():
-                self.items[i] = self.items[i].tolist()
-            json.dump(self.items, f2)
+            for i in self.final_item_matrix.keys():
+                self.final_item_matrix[i] = self.final_item_matrix[i].tolist()
+            json.dump(self.final_item_matrix, f2)
     # 损失函数定义
     def loss_function(self, user_id, item_id, rating, predict_value, user_rated_items_except_item):      # TODO 这个最后一个计算比较耗费时间
         return 0.5 * math.pow((rating - predict_value), 2) + \
@@ -232,16 +246,13 @@ class MPC:
         if iid not in self.item_bias.keys():
             return self.avg_rating
         user_multi_class_vector = 0
-        user_rated_items_except_item = self.user_rated_items[uid].copy()
+        user_rated_items_except_item = self.user_rated_items[uid]
         for r,items in user_rated_items_except_item.items():
-            items.discard(iid) 
-            # 找到下标，从0开始，所以-1
-            norm_len = len(items)
-            if norm_len == 0:
+            copy_item_ids = items
+            indexs = np.array([item_id for item_id in copy_item_ids if item_id != iid]) - 1
+            if len(indexs) == 0:
                 continue
-            user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
-        
-            user_multi_class_vector += (np.sum(self.item_rating_contexts[r-1][user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
+            user_multi_class_vector += (np.sum(self.item_rating_contexts[r-1][indexs], axis=0)) / math.sqrt(len(indexs))
 
         return self.predict_post_process(self.avg_rating + self.user_bias[uid] + self.item_bias[iid] + np.dot((self.users[uid] + user_multi_class_vector), self.items[iid]))
 
@@ -255,7 +266,6 @@ class MPC:
     def test(self, test_data):
         predict_values = []
         for i,row in test_data.iterrows():
-            rating = row['rating']
             uid = row['uid']
             iid = row['iid']
             predict_value = self.predict(uid, iid)
@@ -279,7 +289,7 @@ if __name__ == "__main__":
     start_time = time.time()
     model.vector_initialize()
     print("开始训练")
-    model.train(100, test_data)
+    model.train(50, test_data)
     end_time = time.time()
     elapsed_time = end_time - start_time
     print(f"程序运行时间: {elapsed_time:.2f} 秒")

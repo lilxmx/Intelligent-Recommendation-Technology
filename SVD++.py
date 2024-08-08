@@ -7,10 +7,10 @@ import random
 import time
 from sklearn.metrics import mean_squared_error,mean_absolute_error
 import matplotlib.pyplot as plt
-
-ex_train_data = pd.read_csv("datasets/ml-100k/ua.base.explicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-im_train_data = pd.read_csv("datasets/ml-100k/ua.base.implicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
-test_data = pd.read_csv("datasets/ml-100k/ua.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+random.seed(2024)
+ex_train_data = pd.read_csv("datasets/ml-100k/u5.base.explicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+im_train_data = pd.read_csv("datasets/ml-100k/u5.base.implicit.copy",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
+test_data = pd.read_csv("datasets/ml-100k/u5.test",sep='\t',names=['uid','iid','rating'],usecols=[0,1,2],header=None)
 user_set = set(ex_train_data['uid'])
 item_set = set(ex_train_data['iid'])
 explicit_rating = ex_train_data.values
@@ -138,12 +138,16 @@ class PMF:
                 
                 # 用户u的上下文偏好的特征向量
                 # 归一化的分母值。因为要去除掉本次的物品，所以重新创建一个新的内存地址，不改动原有的。
-                user_rated_items_except_item = self.user_interactived_items[user_id].copy()
-                user_rated_items_except_item.discard(item_id)
-                norm_len = len(user_rated_items_except_item)
+                user_rated_items_except_item = self.user_interactived_items[user_id]
+                # if item_id in user_rated_items_except_item:
+                #     norm_len = len(user_rated_items_except_item) - 1
+                # else:
+                #     norm_len = len(user_rated_items_except_item)
                 # 要获取下标，所以从0开始   
-                user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
-
+                user_rated_items_except_item = np.array([iid for iid in user_rated_items_except_item if iid != item_id]) - 1 
+                norm_len = len(user_rated_items_except_item)
+                if norm_len == 0:
+                    continue
                 user_bias_vector = (np.sum(self.item_contexts[user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
 
                 #  预测值
@@ -220,10 +224,9 @@ class PMF:
         # 测试集中，有些电影在训练集中没有出现
         if iid not in self.item_bias.keys():
             return self.avg_rating
-        user_rated_items_except_item = self.user_interactived_items[uid].copy()
-        user_rated_items_except_item.discard(iid)
-        norm_len = len(user_rated_items_except_item)
-        user_rated_items_except_item = np.array(list(user_rated_items_except_item)) - 1   
+        user_rated_items_except_item = self.user_interactived_items[uid]
+        user_rated_items_except_item = np.array([item_id for item_id in user_rated_items_except_item if item_id != iid]) - 1 
+        norm_len = len(user_rated_items_except_item) 
         user_bias_vector = (np.sum(self.item_contexts[user_rated_items_except_item], axis=0)) / math.sqrt(norm_len)
         return self.predict_post_process(self.avg_rating + self.user_bias[uid] + self.item_bias[iid] + np.dot((self.users[uid] + user_bias_vector), self.items[iid]))
 
